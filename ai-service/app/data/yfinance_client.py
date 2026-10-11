@@ -189,3 +189,35 @@ def fetch_stock_history(ticker: str, period: str = "1y") -> Dict[str, Any]:
     except Exception as exc:
         logger.error("Error fetching market data for %s: %s", symbol, exc)
         return generate_fallback_demo_data(symbol, period)
+
+
+def fetch_real_closing_prices(ticker: str, period: str = "1y") -> pd.Series:
+    """Fetch real adjusted daily closes for modeling; never substitutes demo data."""
+    symbol = ticker.strip().upper()
+    valid_periods = {"1mo", "3mo", "6mo", "1y", "2y", "5y", "max"}
+    if period not in valid_periods:
+        period = "1y"
+
+    try:
+        history = yf.Ticker(symbol).history(period=period, interval="1d", auto_adjust=True)
+    except Exception as exc:
+        raise RuntimeError(f"Yahoo Finance history request failed: {exc}") from exc
+
+    if history is None or history.empty or "Close" not in history:
+        raise RuntimeError("Yahoo Finance returned no real daily closing prices.")
+
+    closes = pd.to_numeric(history["Close"], errors="coerce").sort_index()
+    closes = closes.loc[~closes.index.duplicated(keep="last")]
+    if closes.dropna().empty:
+        raise RuntimeError("Yahoo Finance returned no valid daily closing prices.")
+
+    if getattr(closes.index, "tz", None) is not None:
+        provider_today = pd.Timestamp.now(tz=closes.index.tz).date()
+    else:
+        provider_today = datetime.now().date()
+    while not closes.empty and pd.Timestamp(closes.index[-1]).date() >= provider_today:
+        closes = closes.iloc[:-1]
+
+    if closes.empty:
+        raise RuntimeError("No completed trading session is available from Yahoo Finance.")
+    return closes

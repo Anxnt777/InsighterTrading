@@ -1,20 +1,36 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Navbar } from './components/Navbar';
 import { StockSearch } from './components/StockSearch';
 import { StockMetricsCard } from './components/StockMetricsCard';
 import { StockChart } from './components/StockChart';
 import { WatchlistPanel } from './components/WatchlistPanel';
 import { LoadingSkeleton } from './components/LoadingSkeleton';
+import { SentimentSummaryCard } from './components/sentiment/SentimentSummaryCard';
+import { NewsFeed } from './components/sentiment/NewsFeed';
+import { NextDayForecastCard } from './components/NextDayForecastCard';
 import { stockApi } from './api/stockApi';
-import { StockHistoryResponse } from './types/stock';
+import { NextDayForecast, StockHistoryResponse, StockNewsResponse } from './types/stock';
 import { AlertCircle, RefreshCw, Cpu, Brain, LineChart, Sparkles } from 'lucide-react';
 
 export const App: React.FC = () => {
   const [symbol, setSymbol] = useState('AAPL');
   const [period, setPeriod] = useState('1y');
+
+  // Stock Market State
   const [data, setData] = useState<StockHistoryResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Financial News & Sentiment State
+  const [newsData, setNewsData] = useState<StockNewsResponse | null>(null);
+  const [isNewsLoading, setIsNewsLoading] = useState(true);
+  const [newsError, setNewsError] = useState<string | null>(null);
+  const [forecast, setForecast] = useState<NextDayForecast | null>(null);
+  const [forecastSelection, setForecastSelection] = useState<{ symbol: string; period: string } | null>(null);
+  const forecastRequestId = useRef(0);
+  const [isForecastLoading, setIsForecastLoading] = useState(true);
+  const [forecastError, setForecastError] = useState<string | null>(null);
+
   const [backendConnected, setBackendConnected] = useState(false);
 
   const fetchStock = async (tickerToFetch: string, periodToFetch: string) => {
@@ -37,13 +53,61 @@ export const App: React.FC = () => {
     }
   };
 
+  const fetchNews = async (tickerToFetch: string) => {
+    setIsNewsLoading(true);
+    setNewsError(null);
+    try {
+      const response = await stockApi.getStockNews(tickerToFetch, 10);
+      setNewsData(response);
+    } catch (err: any) {
+      console.error('Failed to load financial news:', err);
+      setNewsError(
+        err.response?.data?.message ||
+        err.message ||
+        'Unable to retrieve financial news stream from backend gateway.'
+      );
+    } finally {
+      setIsNewsLoading(false);
+    }
+  };
+
+  const fetchForecast = async (tickerToFetch: string, periodToFetch: string, signal?: AbortSignal) => {
+    const requestId = ++forecastRequestId.current;
+    setIsForecastLoading(true);
+    setForecastError(null);
+    try {
+      const response = await stockApi.getNextDayForecast(tickerToFetch, periodToFetch, signal);
+      if (!signal?.aborted && requestId === forecastRequestId.current) {
+        if (response.symbol?.toUpperCase() !== tickerToFetch.toUpperCase()) {
+          throw new Error('Forecast response did not match the requested symbol.');
+        }
+        setForecast(response);
+        setForecastSelection({ symbol: tickerToFetch, period: periodToFetch });
+      }
+    } catch (err: any) {
+      if (!signal?.aborted && requestId === forecastRequestId.current && err.code !== 'ERR_CANCELED') {
+        setForecast(null);
+        setForecastSelection(null);
+        setForecastError(err.response?.data?.message || err.message || 'Unable to retrieve the experimental forecast.');
+      }
+    } finally {
+      if (!signal?.aborted && requestId === forecastRequestId.current) setIsForecastLoading(false);
+    }
+  };
+
   useEffect(() => {
-    // Health check check once
+    const forecastController = new AbortController();
+    setForecastSelection(null);
+
     stockApi.getHealth()
       .then(() => setBackendConnected(true))
       .catch(() => setBackendConnected(false));
 
     fetchStock(symbol, period);
+    fetchNews(symbol);
+    fetchForecast(symbol, period, forecastController.signal);
+
+    return () => forecastController.abort();
   }, [symbol, period]);
 
   const handleSearch = (newSymbol: string) => {
@@ -77,7 +141,10 @@ export const App: React.FC = () => {
               <p className="text-xs text-rose-300/90 mt-1">{error}</p>
               <div className="mt-3 flex items-center space-x-2">
                 <button
-                  onClick={() => fetchStock(symbol, period)}
+                  onClick={() => {
+                    fetchStock(symbol, period);
+                    fetchNews(symbol);
+                  }}
                   className="px-3 py-1 bg-rose-600/30 hover:bg-rose-600/40 text-rose-200 border border-rose-500/40 rounded text-xs font-medium flex items-center space-x-1 transition"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
@@ -94,10 +161,31 @@ export const App: React.FC = () => {
         {/* Main Content Dashboard */}
         {!isLoading && data && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            {/* Left 8 Columns: Chart & Metrics */}
+            {/* Left 8 Columns: Chart, Metrics, Sentiment Summary, and News Stream */}
             <div className="lg:col-span-8 space-y-6">
               <StockMetricsCard data={data} />
               <StockChart symbol={data.symbol} bars={data.bars} />
+              <NextDayForecastCard
+                forecast={forecastSelection?.symbol === symbol && forecastSelection.period === period ? forecast : null}
+                isLoading={isForecastLoading}
+                error={forecastError}
+                symbol={data.symbol}
+              />
+
+              {/* Milestone 2: FinBERT News Sentiment Summary */}
+              {newsData && newsData.summary && (
+                <SentimentSummaryCard summary={newsData.summary} symbol={data.symbol} />
+              )}
+
+              {/* Milestone 2: Live Financial News Feed */}
+              <NewsFeed
+                articles={newsData?.articles || []}
+                statusMessage={newsData?.statusMessage}
+                isLoading={isNewsLoading}
+                error={newsError}
+                onRetry={() => fetchNews(symbol)}
+                symbol={data.symbol}
+              />
             </div>
 
             {/* Right 4 Columns: Watchlist & Multi-Tier AI Roadmap */}
@@ -122,19 +210,19 @@ export const App: React.FC = () => {
                   <div className="flex items-start space-x-2.5 p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
                     <LineChart className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
                     <div>
-                      <div className="font-medium text-emerald-300">Milestone 1: Market MVP (Active)</div>
+                      <div className="font-medium text-emerald-300">Milestone 1: Market MVP (Complete)</div>
                       <div className="text-[11px] text-slate-400">
                         Historical OHLCV, SMA-20, SMA-50, RSI-14, Volatility via Spring Boot & FastAPI.
                       </div>
                     </div>
                   </div>
 
-                  <div className="flex items-start space-x-2.5 p-2 rounded-lg bg-slate-950 border border-slate-800/80 opacity-75">
-                    <Brain className="w-4 h-4 text-blue-400 flex-shrink-0 mt-0.5" />
+                  <div className="flex items-start space-x-2.5 p-2 rounded-lg bg-indigo-500/10 border border-indigo-500/20">
+                    <Brain className="w-4 h-4 text-indigo-400 flex-shrink-0 mt-0.5" />
                     <div>
-                      <div className="font-medium text-slate-200">Milestone 2: FinBERT Sentiment</div>
+                      <div className="font-medium text-indigo-300">Milestone 2: FinBERT Sentiment (Active)</div>
                       <div className="text-[11px] text-slate-400">
-                        News feed ingestion + HuggingFace FinBERT sentiment polarity scoring.
+                        Financial news ingestion + HuggingFace FinBERT sentiment polarity scoring & aggregation.
                       </div>
                     </div>
                   </div>
@@ -142,9 +230,9 @@ export const App: React.FC = () => {
                   <div className="flex items-start space-x-2.5 p-2 rounded-lg bg-slate-950 border border-slate-800/80 opacity-75">
                     <Sparkles className="w-4 h-4 text-purple-400 flex-shrink-0 mt-0.5" />
                     <div>
-                      <div className="font-medium text-slate-200">Milestone 3 & 4: Trend Classification & XAI</div>
+                      <div className="font-medium text-slate-200">Milestone 3 & 4: Trend Prediction & XAI</div>
                       <div className="text-[11px] text-slate-400">
-                        Bullish/Bearish prediction with TimeSeriesSplit validation and SHAP explainability.
+                        Bullish/Bearish classification with TimeSeriesSplit validation and SHAP explainability.
                       </div>
                     </div>
                   </div>

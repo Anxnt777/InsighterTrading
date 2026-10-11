@@ -81,3 +81,76 @@ Base URL: `http://localhost:8000/api/v1`
 ### 2. Market Historical Ingestion & Indicators
 `GET /market/history?ticker={ticker}&period={period}`
 Returns market bars with calculated technical indicators and metadata.
+
+### 3. Financial News Stream & Sentiment Analysis
+`GET /news?ticker={ticker}&limit={limit}&start_date={start_date}&end_date={end_date}`
+Returns normalized articles with individual FinBERT sentiment probabilities and aggregated metrics.
+
+### 4. Direct Headline Sentiment Inference
+`POST /nlp/sentiment`
+**Request**:
+```json
+{
+  "texts": ["Apple beats quarterly profit projections", "Macro headwinds pressure margins"]
+}
+```
+
+### 5. Experimental Next-Trading-Session Direction Estimate
+`GET /market/forecast?ticker={ticker}&period={period}`
+
+Uses real Yahoo Finance adjusted daily closes to estimate whether the next trading-session close is higher or lower than the latest completed close. `targetDate` is `null` when no exchange calendar is available to establish the date reliably. Synthetic/demo market data is never used for a forecast.
+
+**Response (200 OK)**:
+```json
+{
+  "status": "available",
+  "symbol": "AAPL",
+  "asOf": "2026-10-09",
+  "targetDate": null,
+  "currentClose": 245.12,
+  "predictedDirection": "higher",
+  "probabilityHigher": 0.57,
+  "model": "LogisticRegression",
+  "trainingObservations": 950,
+  "evaluation": {
+    "split": "chronological 80/20",
+    "testSampleCount": 190,
+    "accuracy": 0.54,
+    "precision": 0.55,
+    "recall": 0.62,
+    "confusionMatrix": [[38, 31], [26, 43]],
+    "confusionMatrixOrder": "[[true lower/pred lower, true lower/pred higher], [true higher/pred lower, true higher/pred higher]]",
+    "majorityBaseline": { "majorityClass": "higher", "accuracy": 0.51 }
+  },
+  "dataSource": "yfinance",
+  "statusMessage": null,
+  "disclaimer": "Experimental direction estimate for academic research only; not financial advice or a guaranteed prediction."
+}
+```
+
+Insufficient eligible history returns HTTP 422; real-provider failures return HTTP 503. Both responses include a `detail` message. The estimator uses lagged daily returns, rolling means/volatility, and moving-average gaps available at each close. Labels compare that close with the following trading session's close. The earliest 80% of eligible labeled rows train the evaluation model; the latest 20% are held out in chronological order without shuffling. A training-majority-class baseline is scored on those same held-out dates. Standardization is fitted only within the training pipeline. After evaluation, a fresh pipeline is fitted on all eligible labeled rows for the latest estimate.
+**Response**:
+```json
+{
+  "count": 2,
+  "modelUsed": "ProsusAI/finbert",
+  "results": [
+    {
+      "sentimentLabel": "positive",
+      "sentimentScores": { "positive": 0.89, "neutral": 0.08, "negative": 0.03 },
+      "modelUsed": "ProsusAI/finbert"
+    }
+  ]
+}
+```
+
+---
+
+## Spring Boot Backend News Endpoint
+`GET /api/v1/stocks/{ticker}/news?limit=10`
+Returns `StockNewsResponse` containing list of articles and `SentimentSummaryDto` (net sentiment score, distribution percentages, model name, and aggregation methodology).
+
+## Spring Boot Backend Forecast Endpoint
+`GET /api/v1/stocks/{ticker}/forecast?period=1y`
+
+Forwards to the Python forecast endpoint and returns the same forecast structure. Provider or insufficient-history failures are returned as `status: "unavailable"` with a message and no fabricated forecast values.

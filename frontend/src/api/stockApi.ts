@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { StockHistoryResponse } from '../types/stock';
+import { NextDayForecast, StockHistoryResponse, StockNewsResponse } from '../types/stock';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080/api/v1';
 
@@ -11,6 +11,25 @@ export const stockApi = {
         params: { period },
         timeout: 20000,
       }
+    );
+    return response.data;
+  },
+
+  async getStockNews(ticker: string, limit: number = 10): Promise<StockNewsResponse> {
+    const response = await axios.get<StockNewsResponse>(
+      `${API_BASE_URL}/stocks/${encodeURIComponent(ticker)}/news`,
+      {
+        params: { limit },
+        timeout: 25000,
+      }
+    );
+    return response.data;
+  },
+
+  async getNextDayForecast(ticker: string, period: string = '1y', signal?: AbortSignal): Promise<NextDayForecast> {
+    const response = await axios.get<NextDayForecast>(
+      `${API_BASE_URL}/stocks/${encodeURIComponent(ticker)}/forecast`,
+      { params: { period }, timeout: 30000, signal }
     );
     return response.data;
   },

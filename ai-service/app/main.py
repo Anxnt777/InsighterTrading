@@ -1,10 +1,13 @@
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.api.market import router as market_router
+from app.api.news import router as news_router
+from app.nlp.sentiment_analyzer import sentiment_analyzer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -12,10 +15,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger("insighter-ai")
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Load FinBERT before accepting requests; initialization failures use the lexicon fallback."""
+    if sentiment_analyzer.enable_finbert:
+        logger.info("Warming up sentiment model before serving requests.")
+        logger.info("Sentiment model ready: %s", sentiment_analyzer.warm_up())
+    yield
+
+
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
     description="InsighterTrading Financial Market Intelligence & Analytics Engine",
+    lifespan=lifespan,
 )
 
 # CORS configuration
@@ -29,6 +43,7 @@ app.add_middleware(
 
 # Register routes
 app.include_router(market_router)
+app.include_router(news_router)
 
 
 @app.get("/health", tags=["Health"])
